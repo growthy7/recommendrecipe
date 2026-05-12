@@ -2,6 +2,7 @@ import { RecipeSummary } from "./types";
 
 const FRIDGE_KEY = "fridge_v1";
 const FAVORITES_KEY = "favorites_v1";
+const FRIDGE_CODE_KEY = "fridge_code_v1";
 
 function safeGet<T>(key: string, fallback: T): T {
   if (typeof window === "undefined") return fallback;
@@ -25,6 +26,14 @@ export function getFridge(): string[] {
 
 export function setFridge(items: string[]): void {
   safeSet(FRIDGE_KEY, items);
+}
+
+export function getFridgeCode(): string {
+  return safeGet<string>(FRIDGE_CODE_KEY, "");
+}
+
+export function setFridgeCode(code: string): void {
+  safeSet(FRIDGE_CODE_KEY, code);
 }
 
 export function getFavorites(): RecipeSummary[] {

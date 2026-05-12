@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import SearchTab from "@/components/SearchTab";
 import FridgeTab from "@/components/FridgeTab";
 import FavoritesTab from "@/components/FavoritesTab";
@@ -15,12 +16,17 @@ const TABS: { id: Tab; emoji: string; label: string }[] = [
 
 const HEADER: Record<Tab, { emoji: string; title: string; sub: string }> = {
   search: { emoji: "🥕", title: "재료로 검색", sub: "냉장고 재료로 레시피를 찾아보세요" },
-  fridge: { emoji: "🧊", title: "내 냉장고", sub: "재료를 저장하고 한 번에 검색해요" },
+  fridge: { emoji: "🧊", title: "내 냉장고", sub: "재료를 저장하고 가족과 공유해요" },
   favorites: { emoji: "❤️", title: "즐겨찾기", sub: "저장해둔 레시피를 다시 봐요" },
 };
 
-export default function Home() {
-  const [tab, setTab] = useState<Tab>("search");
+function HomeContent() {
+  const searchParams = useSearchParams();
+
+  // ?fridge=CODE 로 접근하면 냉장고 탭으로 자동 이동
+  const sharedFridgeCode = searchParams.get("fridge") || undefined;
+  const [tab, setTab] = useState<Tab>(sharedFridgeCode ? "fridge" : "search");
+
   const h = HEADER[tab];
 
   return (
@@ -45,7 +51,7 @@ export default function Home() {
             <SearchTab />
           </Suspense>
         )}
-        {tab === "fridge" && <FridgeTab />}
+        {tab === "fridge" && <FridgeTab initialCode={sharedFridgeCode} />}
         {tab === "favorites" && <FavoritesTab />}
       </main>
 
@@ -64,5 +70,19 @@ export default function Home() {
         ))}
       </nav>
     </div>
+  );
+}
+
+export default function Home() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex items-center justify-center min-h-screen">
+          <div className="text-4xl animate-spin">🍳</div>
+        </div>
+      }
+    >
+      <HomeContent />
+    </Suspense>
   );
 }

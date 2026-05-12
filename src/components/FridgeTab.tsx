@@ -1,26 +1,128 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import RecipeCard from "./RecipeCard";
 import { RecipeSummary, INGREDIENT_CATEGORIES } from "@/lib/types";
-import { getFridge, setFridge } from "@/lib/storage";
+import { getFridge, setFridge, getFridgeCode, setFridgeCode } from "@/lib/storage";
 
-export default function FridgeTab() {
+type SyncStatus = "idle" | "syncing" | "synced" | "error";
+
+interface Props {
+  initialCode?: string; // URL 공유로 넘어온 코드
+}
+
+export default function FridgeTab({ initialCode }: Props) {
+  const [code, setCode] = useState("");
+  const [codeInput, setCodeInput] = useState("");
   const [fridge, setFridgeState] = useState<string[]>([]);
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>("idle");
+  const [syncError, setSyncError] = useState("");
+
   const [inputValue, setInputValue] = useState("");
   const [activeCategory, setActiveCategory] = useState(0);
   const [recipes, setRecipes] = useState<RecipeSummary[]>([]);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [searchError, setSearchError] = useState("");
   const [searched, setSearched] = useState(false);
+  const [shareToast, setShareToast] = useState(false);
 
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isFirstLoad = useRef(true);
+
+  // 초기화: localStorage에서 코드 복원 or URL 파라미터 코드 사용
   useEffect(() => {
-    setFridgeState(getFridge());
+    const saved = initialCode || getFridgeCode();
+    if (saved) {
+      setCode(saved);
+      setCodeInput(saved);
+      loadFromKV(saved);
+    } else {
+      setFridgeState(getFridge());
+    }
+  }, [initialCode]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const loadFromKV = async (roomCode: string) => {
+    setSyncStatus("syncing");
+    setSyncError("");
+    try {
+      const res = await fetch(`/api/fridge/${encodeURIComponent(roomCode)}`);
+      const data = await res.json();
+      if (data.error) {
+        setSyncError(data.error);
+        setSyncStatus("error");
+        setFridgeState(getFridge()); // KV 실패 시 로컬 사용
+      } else {
+        setFridgeState(data.ingredients);
+        setFridge(data.ingredients);
+        setSyncStatus("synced");
+      }
+    } catch {
+      setSyncError("네트워크 오류");
+      setSyncStatus("error");
+      setFridgeState(getFridge());
+    }
+  };
+
+  const saveToKV = useCallback(async (items: string[], roomCode: string) => {
+    setSyncStatus("syncing");
+    try {
+      const res = await fetch(`/api/fridge/${encodeURIComponent(roomCode)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ingredients: items }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        setSyncError(data.error);
+        setSyncStatus("error");
+      } else {
+        setSyncStatus("synced");
+        setSyncError("");
+      }
+    } catch {
+      setSyncStatus("error");
+      setSyncError("동기화 실패");
+    }
   }, []);
 
   const updateFridge = (items: string[]) => {
     setFridgeState(items);
-    setFridge(items);
+    setFridge(items); // 항상 로컬에도 저장
+
+    if (!code) return;
+
+    // 첫 로드 시 KV 덮어쓰기 방지
+    if (isFirstLoad.current) { isFirstLoad.current = false; return; }
+
+    // 1초 디바운스로 KV에 저장
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => saveToKV(items, code), 1000);
+  };
+
+  const applyCode = async () => {
+    const trimmed = codeInput.trim().toLowerCase();
+    if (!trimmed) return;
+    isFirstLoad.current = true;
+    setCode(trimmed);
+    setFridgeCode(trimmed);
+    await loadFromKV(trimmed);
+  };
+
+  const clearCode = () => {
+    setCode("");
+    setCodeInput("");
+    setFridgeCode("");
+    setSyncStatus("idle");
+    setSyncError("");
+    setFridgeState(getFridge());
+  };
+
+  const handleShare = async () => {
+    if (!code) return;
+    const url = `${window.location.origin}/?fridge=${encodeURIComponent(code)}`;
+    try { await navigator.clipboard.writeText(url); } catch {}
+    setShareToast(true);
+    setTimeout(() => setShareToast(false), 2500);
   };
 
   const toggleItem = (item: string) => {
@@ -42,23 +144,95 @@ export default function FridgeTab() {
   const handleSearch = async () => {
     if (fridge.length === 0) return;
     setLoading(true);
-    setError("");
+    setSearchError("");
     setSearched(true);
     try {
       const res = await fetch(`/api/search?ingredients=${encodeURIComponent(fridge.join(","))}`);
       const data = await res.json();
-      if (data.error) { setError(data.error); setRecipes([]); }
+      if (data.error) { setSearchError(data.error); setRecipes([]); }
       else setRecipes(data.recipes || []);
     } catch {
-      setError("레시피를 검색하는 중 오류가 발생했습니다.");
+      setSearchError("레시피를 검색하는 중 오류가 발생했습니다.");
       setRecipes([]);
     } finally {
       setLoading(false);
     }
   };
 
+  const syncLabel: Record<SyncStatus, string> = {
+    idle: "",
+    syncing: "🔄 동기화 중...",
+    synced: "✅ 동기화됨",
+    error: `❌ ${syncError}`,
+  };
+
   return (
     <div className="px-4 py-5 space-y-5">
+      {/* 방 코드 설정 */}
+      <section className="bg-white rounded-2xl p-4 shadow-sm">
+        <div className="flex items-center gap-2 mb-3">
+          <span className="text-lg">🔗</span>
+          <h2 className="text-sm font-semibold text-gray-700">가족 공유 코드</h2>
+        </div>
+
+        {!code ? (
+          <>
+            <p className="text-xs text-gray-400 mb-3">
+              코드를 설정하면 같은 코드를 사용하는 기기와 냉장고 재료가 자동으로 동기화됩니다.
+            </p>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={codeInput}
+                onChange={(e) => setCodeInput(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && applyCode()}
+                placeholder="예: 우리가족 또는 kim2024"
+                className="flex-1 border border-warm-200 rounded-full px-4 py-2 text-sm focus:outline-none focus:border-primary"
+              />
+              <button onClick={applyCode} className="btn-primary text-sm">연결</button>
+            </div>
+          </>
+        ) : (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="bg-warm-100 border border-warm-200 text-gray-700 text-sm font-medium px-3 py-1 rounded-full">
+                  {code}
+                </span>
+                {syncStatus !== "idle" && (
+                  <span className={`text-xs ${syncStatus === "error" ? "text-red-500" : "text-gray-400"}`}>
+                    {syncLabel[syncStatus]}
+                  </span>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={handleShare}
+                  className="text-xs text-primary underline underline-offset-2"
+                >
+                  링크 공유
+                </button>
+                <button
+                  onClick={clearCode}
+                  className="text-xs text-gray-400 underline underline-offset-2"
+                >
+                  변경
+                </button>
+              </div>
+            </div>
+            <p className="text-xs text-gray-400">
+              링크를 가족에게 공유하면 같은 냉장고를 함께 사용할 수 있어요.
+            </p>
+          </div>
+        )}
+      </section>
+
+      {shareToast && (
+        <div className="fixed bottom-24 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-sm px-4 py-2 rounded-full shadow-lg z-50">
+          공유 링크가 복사되었습니다!
+        </div>
+      )}
+
       {/* 냉장고 현황 */}
       <section className="bg-white rounded-2xl p-4 shadow-sm">
         <div className="flex items-center gap-2 mb-3">
@@ -145,9 +319,9 @@ export default function FridgeTab() {
         </button>
       )}
 
-      {error && (
+      {searchError && (
         <div className="bg-red-50 border border-red-200 text-red-700 rounded-2xl p-4 text-sm">
-          {error}
+          {searchError}
         </div>
       )}
 
@@ -158,7 +332,7 @@ export default function FridgeTab() {
         </div>
       )}
 
-      {!loading && searched && recipes.length === 0 && !error && (
+      {!loading && searched && recipes.length === 0 && !searchError && (
         <div className="text-center py-10 text-gray-400">
           <div className="text-4xl mb-3">🔍</div>
           <p>검색 결과가 없습니다.</p>
@@ -175,12 +349,7 @@ export default function FridgeTab() {
           </div>
           <p className="text-xs text-gray-400 text-center mt-4">
             출처:{" "}
-            <a
-              href="https://www.10000recipe.com"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="underline"
-            >
+            <a href="https://www.10000recipe.com" target="_blank" rel="noopener noreferrer" className="underline">
               만개의레시피
             </a>
           </p>
