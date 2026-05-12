@@ -1,11 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
-import { kv } from "@vercel/kv";
+import { Redis } from "@upstash/redis";
 
-const KEY_PREFIX = "fridge:";
 const TTL_SECONDS = 60 * 60 * 24 * 90; // 90일
 
+function getRedis() {
+  const url = process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (!url || !token) throw new Error("Upstash 환경변수가 설정되지 않았습니다.");
+  return new Redis({ url, token });
+}
+
 function fridgeKey(code: string) {
-  return `${KEY_PREFIX}${code.toLowerCase().trim()}`;
+  return `fridge:${code.toLowerCase().trim()}`;
 }
 
 export async function GET(
@@ -16,11 +22,13 @@ export async function GET(
   if (!code) return NextResponse.json({ ingredients: [] });
 
   try {
-    const ingredients = (await kv.get<string[]>(fridgeKey(code))) ?? [];
+    const redis = getRedis();
+    const ingredients = (await redis.get<string[]>(fridgeKey(code))) ?? [];
     return NextResponse.json({ ingredients });
-  } catch {
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "알 수 없는 오류";
     return NextResponse.json(
-      { error: "KV 연결 실패. Vercel KV가 설정되지 않았습니다." },
+      { error: `DB 연결 실패: ${message}` },
       { status: 503 }
     );
   }
@@ -38,11 +46,13 @@ export async function PUT(
     if (!Array.isArray(ingredients)) {
       return NextResponse.json({ error: "잘못된 형식입니다." }, { status: 400 });
     }
-    await kv.set(fridgeKey(code), ingredients, { ex: TTL_SECONDS });
+    const redis = getRedis();
+    await redis.set(fridgeKey(code), ingredients, { ex: TTL_SECONDS });
     return NextResponse.json({ ok: true });
-  } catch {
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "알 수 없는 오류";
     return NextResponse.json(
-      { error: "KV 연결 실패. Vercel KV가 설정되지 않았습니다." },
+      { error: `DB 연결 실패: ${message}` },
       { status: 503 }
     );
   }
