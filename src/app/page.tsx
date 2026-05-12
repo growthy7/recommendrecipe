@@ -16,16 +16,16 @@ const TABS: { id: Tab; emoji: string; label: string }[] = [
 
 const HEADER: Record<Tab, { emoji: string; title: string; sub: string }> = {
   search: { emoji: "🥕", title: "재료로 검색", sub: "냉장고 재료로 레시피를 찾아보세요" },
-  fridge: { emoji: "🧊", title: "내 냉장고", sub: "재료를 저장하고 가족과 공유해요" },
+  fridge: { emoji: "🧊", title: "내 냉장고", sub: "재료를 추가하고 레시피를 찾아보세요" },
   favorites: { emoji: "❤️", title: "즐겨찾기", sub: "저장해둔 레시피를 다시 봐요" },
 };
 
 function HomeContent() {
   const searchParams = useSearchParams();
-
-  // ?fridge=CODE 로 접근하면 냉장고 탭으로 자동 이동
-  const sharedFridgeCode = searchParams.get("fridge") || undefined;
-  const [tab, setTab] = useState<Tab>(sharedFridgeCode ? "fridge" : "search");
+  const initialTab = searchParams.get("tab") as Tab | null;
+  const [tab, setTab] = useState<Tab>(
+    TABS.some((t) => t.id === initialTab) ? initialTab! : "search"
+  );
 
   const h = HEADER[tab];
 
@@ -51,7 +51,7 @@ function HomeContent() {
             <SearchTab />
           </Suspense>
         )}
-        {tab === "fridge" && <FridgeTab initialCode={sharedFridgeCode} />}
+        {tab === "fridge" && <FridgeTab />}
         {tab === "favorites" && <FavoritesTab />}
       </main>
 
