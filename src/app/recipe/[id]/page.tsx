@@ -3,7 +3,8 @@
 import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Image from "next/image";
-import { RecipeDetail } from "@/lib/types";
+import { RecipeDetail, RecipeSummary } from "@/lib/types";
+import { isFavorite, toggleFavorite } from "@/lib/storage";
 
 export default function RecipePage() {
   const params = useParams();
@@ -13,6 +14,7 @@ export default function RecipePage() {
   const [recipe, setRecipe] = useState<RecipeDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [faved, setFaved] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -20,15 +22,27 @@ export default function RecipePage() {
     fetch(`/api/recipe/${id}`)
       .then((r) => r.json())
       .then((data) => {
-        if (data.error) {
-          setError(data.error);
-        } else {
+        if (data.error) setError(data.error);
+        else {
           setRecipe(data.recipe);
+          setFaved(isFavorite(id));
         }
       })
       .catch(() => setError("레시피를 불러오는 중 오류가 발생했습니다."))
       .finally(() => setLoading(false));
   }, [id]);
+
+  const handleFav = () => {
+    if (!recipe) return;
+    const summary: RecipeSummary = {
+      id: recipe.id,
+      title: recipe.title,
+      thumbnail: recipe.thumbnail,
+      url: recipe.url,
+      description: "",
+    };
+    setFaved(toggleFavorite(summary));
+  };
 
   if (loading) {
     return (
@@ -44,16 +58,14 @@ export default function RecipePage() {
       <div className="max-w-md mx-auto min-h-screen flex flex-col items-center justify-center gap-4 px-4">
         <div className="text-5xl">😢</div>
         <p className="text-gray-600 text-center">{error || "레시피를 찾을 수 없습니다."}</p>
-        <button onClick={() => router.back()} className="btn-primary">
-          돌아가기
-        </button>
+        <button onClick={() => router.back()} className="btn-primary">돌아가기</button>
       </div>
     );
   }
 
   return (
     <div className="max-w-md mx-auto min-h-screen bg-white">
-      {/* Back + Source */}
+      {/* Sticky header */}
       <div className="sticky top-0 bg-white/90 backdrop-blur-sm z-10 flex items-center justify-between px-4 py-3 border-b border-gray-100">
         <button
           onClick={() => router.back()}
@@ -61,17 +73,26 @@ export default function RecipePage() {
         >
           ← 목록
         </button>
-        <a
-          href={recipe.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-xs text-gray-400 underline underline-offset-2"
-        >
-          만개의레시피 원본 보기
-        </a>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={handleFav}
+            className="text-xl active:scale-90 transition-transform"
+            aria-label={faved ? "즐겨찾기 해제" : "즐겨찾기 추가"}
+          >
+            {faved ? "❤️" : "🤍"}
+          </button>
+          <a
+            href={recipe.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs text-gray-400 underline underline-offset-2"
+          >
+            원본 보기
+          </a>
+        </div>
       </div>
 
-      {/* Hero Image */}
+      {/* Hero image */}
       {recipe.thumbnail && (
         <div className="relative aspect-[4/3] bg-warm-100">
           <Image
@@ -85,11 +106,11 @@ export default function RecipePage() {
       )}
 
       <div className="px-4 py-5 space-y-6">
-        {/* Title + Meta */}
+        {/* Title + meta */}
         <div>
           <h1 className="text-xl font-bold text-gray-800 leading-snug">{recipe.title}</h1>
           {(recipe.servings || recipe.cookTime || recipe.difficulty) && (
-            <div className="flex gap-4 mt-3">
+            <div className="flex gap-5 mt-3">
               {recipe.servings && (
                 <div className="text-center">
                   <div className="text-lg">🍽️</div>
@@ -150,7 +171,7 @@ export default function RecipePage() {
               <span className="w-1 h-5 bg-secondary rounded-full inline-block" />
               조리 순서
             </h2>
-            <ol className="space-y-4">
+            <ol className="space-y-5">
               {recipe.steps.map((step) => (
                 <li key={step.step} className="flex gap-3">
                   <span className="flex-shrink-0 w-7 h-7 bg-secondary text-white text-sm font-bold rounded-full flex items-center justify-center mt-0.5">
@@ -190,10 +211,10 @@ export default function RecipePage() {
           </div>
         )}
 
-        {/* Source Attribution */}
+        {/* Source */}
         <div className="border-t border-gray-100 pt-4 pb-6 text-center">
           <p className="text-xs text-gray-400">
-            본 레시피의 출처는{" "}
+            출처:{" "}
             <a
               href={recipe.url}
               target="_blank"
@@ -202,7 +223,6 @@ export default function RecipePage() {
             >
               만개의레시피
             </a>
-            입니다.
           </p>
         </div>
       </div>

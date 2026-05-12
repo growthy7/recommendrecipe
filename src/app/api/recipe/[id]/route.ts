@@ -8,10 +8,11 @@ const BASE_URL = "https://www.10000recipe.com";
 
 const FETCH_HEADERS = {
   "User-Agent":
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
   "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8",
   Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-  Referer: "https://www.10000recipe.com/",
+  Referer: "https://www.google.com/",
+  "Upgrade-Insecure-Requests": "1",
 };
 
 export async function GET(
@@ -38,81 +39,121 @@ export async function GET(
     const html = await res.text();
     const $ = cheerio.load(html);
 
+    // Title
     const title =
+      $("h3.view2_summary_title").text().trim() ||
       $(".view2_summary_title").text().trim() ||
-      $("h3.view_summary_title").text().trim() ||
       $(".view_title_h3").text().trim() ||
       $("h3").first().text().trim();
 
+    // Thumbnail
     const thumbnail =
-      $(".view_pic img").attr("src") ||
+      $(".thum_area img").attr("src") ||
       $(".view2_pic img").attr("src") ||
-      $(".main_pic img").attr("src") ||
+      $(".view_pic img").attr("src") ||
+      $("img[class*='main']").first().attr("src") ||
       "";
 
-    const infoItems = $(".view2_summary_info1, .view2_summary_info2, .view2_summary_info3");
-    const servings = infoItems.eq(0).text().trim();
-    const cookTime = infoItems.eq(1).text().trim();
-    const difficulty = infoItems.eq(2).text().trim();
+    // Meta info (servings, time, difficulty)
+    const servings =
+      $(".view2_summary_info1 dd").text().trim() ||
+      $(".view2_summary_info1").text().trim();
+    const cookTime =
+      $(".view2_summary_info2 dd").text().trim() ||
+      $(".view2_summary_info2").text().trim();
+    const difficulty =
+      $(".view2_summary_info3 dd").text().trim() ||
+      $(".view2_summary_info3").text().trim();
 
-    // Parse ingredients
+    // ── Ingredients ──────────────────────────────────────────────
     const ingredients: IngredientGroup[] = [];
-    const defaultGroup: IngredientGroup = { name: "재료", items: [] };
 
+    // Strategy 1: confirmed material area with groups
     $("#divConfirmedMaterialArea .cont_ingre2").each((_i, section) => {
-      const groupName = $(section).find("b").text().trim();
+      const groupName = $(section).find("b").first().text().trim();
       const items: string[] = [];
-      $(section)
-        .find(".ingre_list_name")
-        .each((_j, item) => {
-          const name = $(item).text().trim();
-          const amount = $(item).next(".ingre_list_ea").text().trim();
-          if (name) items.push(amount ? `${name} ${amount}` : name);
-        });
-      if (items.length > 0) {
-        ingredients.push({ name: groupName || "재료", items });
-      }
+      $(section).find("li").each((_j, li) => {
+        const name =
+          $(li).find(".ingre_list_name").text().trim() ||
+          $(li).find("a").first().text().trim();
+        const amount =
+          $(li).find(".ingre_list_ea").text().trim() ||
+          $(li).find("span").text().trim();
+        if (name) items.push(amount ? `${name} ${amount}` : name);
+      });
+      if (items.length > 0) ingredients.push({ name: groupName || "재료", items });
     });
 
-    // Fallback ingredient parsing
+    // Strategy 2: flat list inside confirmed material area
     if (ingredients.length === 0) {
+      const items: string[] = [];
+      $("#divConfirmedMaterialArea li").each((_i, li) => {
+        const name =
+          $(li).find(".ingre_list_name").text().trim() ||
+          $(li).find("a").first().text().trim();
+        const amount =
+          $(li).find(".ingre_list_ea").text().trim() ||
+          $(li).find("span").text().trim();
+        if (name) items.push(amount ? `${name} ${amount}` : name);
+      });
+      if (items.length > 0) ingredients.push({ name: "재료", items });
+    }
+
+    // Strategy 3: anywhere on page
+    if (ingredients.length === 0) {
+      const items: string[] = [];
       $(".ingre_list_name").each((_i, el) => {
         const name = $(el).text().trim();
         const amount = $(el).next(".ingre_list_ea").text().trim();
-        if (name) defaultGroup.items.push(amount ? `${name} ${amount}` : name);
+        if (name) items.push(amount ? `${name} ${amount}` : name);
       });
-      if (defaultGroup.items.length > 0) ingredients.push(defaultGroup);
+      if (items.length > 0) ingredients.push({ name: "재료", items });
     }
 
-    // Parse cooking steps
+    // ── Steps ─────────────────────────────────────────────────────
     const steps: CookingStep[] = [];
+
+    // Strategy 1: standard step container
     $("#stepDiv .view_step_cont").each((i, el) => {
-      const description = $(el).find(".view_step_desc").text().trim() ||
-        $(el).find("p").text().trim();
-      const image =
+      const description =
+        $(el).find(".view_step_desc").text().trim() ||
+        $(el).find(".step_list_l_text").text().trim() ||
+        $(el).find("p").first().text().trim();
+      const imgSrc =
         $(el).find("img.step_view_thumbs_big").attr("src") ||
-        $(el).find("img").attr("src");
+        $(el).find("img").first().attr("src");
       if (description) {
         steps.push({
           step: i + 1,
           description,
-          image: image && image.startsWith("http") ? image : undefined,
+          image: imgSrc && imgSrc.startsWith("http") ? imgSrc : undefined,
         });
       }
     });
 
-    // Fallback step parsing
+    // Strategy 2: step_list items
     if (steps.length === 0) {
       $(".step_list_l").each((i, el) => {
-        const description = $(el).find(".step_list_l_text").text().trim() ||
+        const description =
+          $(el).find(".view_step_desc").text().trim() ||
           $(el).text().trim();
-        const image = $(el).find("img").attr("src");
+        const imgSrc = $(el).siblings(".step_list_r").find("img").attr("src");
         if (description) {
           steps.push({
             step: i + 1,
             description,
-            image: image && image.startsWith("http") ? image : undefined,
+            image: imgSrc && imgSrc.startsWith("http") ? imgSrc : undefined,
           });
+        }
+      });
+    }
+
+    // Strategy 3: any element with step class
+    if (steps.length === 0) {
+      $("[class*='step_cont'], [class*='step_desc']").each((i, el) => {
+        const description = $(el).text().trim();
+        if (description && description.length > 5) {
+          steps.push({ step: i + 1, description });
         }
       });
     }
