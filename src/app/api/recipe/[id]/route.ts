@@ -15,6 +15,27 @@ const FETCH_HEADERS = {
   "Upgrade-Insecure-Requests": "1",
 };
 
+// 레이지 로딩 대응: src → data-src → data-original → data-lazy-src 순서로 시도
+// base64 placeholder 및 빈 값은 제외하고 절대 URL로 변환
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function resolveImg($imgs: cheerio.Cheerio<any>): string | undefined {
+  let result = "";
+  $imgs.each((_, el) => {
+    const attrs = el.attribs ?? {};
+    const raw =
+      attrs["src"] || attrs["data-src"] || attrs["data-original"] ||
+      attrs["data-lazy-src"] || attrs["data-img-src"] || "";
+
+    if (!raw || raw.startsWith("data:")) return; // placeholder 건너뜀
+
+    if (raw.startsWith("//")) { result = `https:${raw}`; return false; }
+    if (!raw.startsWith("http")) { result = `${BASE_URL}${raw}`; return false; }
+    result = raw;
+    return false;
+  });
+  return result || undefined;
+}
+
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -39,22 +60,22 @@ export async function GET(
     const html = await res.text();
     const $ = cheerio.load(html);
 
-    // Title
+    // ── 제목 ──────────────────────────────────────────────────────
     const title =
       $("h3.view2_summary_title").text().trim() ||
       $(".view2_summary_title").text().trim() ||
       $(".view_title_h3").text().trim() ||
       $("h3").first().text().trim();
 
-    // Thumbnail
+    // ── 대표 이미지 (레이지 로딩 포함) ────────────────────────────
     const thumbnail =
-      $(".thum_area img").attr("src") ||
-      $(".view2_pic img").attr("src") ||
-      $(".view_pic img").attr("src") ||
-      $("img[class*='main']").first().attr("src") ||
+      resolveImg($(".thum_area img")) ||
+      resolveImg($(".view2_pic img")) ||
+      resolveImg($(".view_pic img")) ||
+      resolveImg($("img[class*='main_img']")) ||
       "";
 
-    // Meta info (servings, time, difficulty)
+    // ── 메타 정보 ─────────────────────────────────────────────────
     const servings =
       $(".view2_summary_info1 dd").text().trim() ||
       $(".view2_summary_info1").text().trim();
@@ -65,10 +86,10 @@ export async function GET(
       $(".view2_summary_info3 dd").text().trim() ||
       $(".view2_summary_info3").text().trim();
 
-    // ── Ingredients ──────────────────────────────────────────────
+    // ── 재료 ──────────────────────────────────────────────────────
     const ingredients: IngredientGroup[] = [];
 
-    // Strategy 1: confirmed material area with groups
+    // Strategy 1: 그룹별 재료 영역
     $("#divConfirmedMaterialArea .cont_ingre2").each((_i, section) => {
       const groupName = $(section).find("b").first().text().trim();
       const items: string[] = [];
@@ -84,7 +105,7 @@ export async function GET(
       if (items.length > 0) ingredients.push({ name: groupName || "재료", items });
     });
 
-    // Strategy 2: flat list inside confirmed material area
+    // Strategy 2: 그룹 없이 단일 목록
     if (ingredients.length === 0) {
       const items: string[] = [];
       $("#divConfirmedMaterialArea li").each((_i, li) => {
@@ -99,7 +120,7 @@ export async function GET(
       if (items.length > 0) ingredients.push({ name: "재료", items });
     }
 
-    // Strategy 3: anywhere on page
+    // Strategy 3: 페이지 전체에서 재료 클래스 검색
     if (ingredients.length === 0) {
       const items: string[] = [];
       $(".ingre_list_name").each((_i, el) => {
@@ -110,50 +131,48 @@ export async function GET(
       if (items.length > 0) ingredients.push({ name: "재료", items });
     }
 
-    // ── Steps ─────────────────────────────────────────────────────
+    // ── 조리 순서 (단계별 이미지 포함) ────────────────────────────
     const steps: CookingStep[] = [];
 
-    // Strategy 1: standard step container
+    // Strategy 1: 표준 step 컨테이너
     $("#stepDiv .view_step_cont").each((i, el) => {
       const description =
         $(el).find(".view_step_desc").text().trim() ||
         $(el).find(".step_list_l_text").text().trim() ||
         $(el).find("p").first().text().trim();
-      const imgSrc =
-        $(el).find("img.step_view_thumbs_big").attr("src") ||
-        $(el).find("img").first().attr("src");
+
+      // step_list_r 안의 이미지 (레이지 로딩 포함)
+      const image =
+        resolveImg($(el).find(".step_list_r img")) ||
+        resolveImg($(el).find("img.step_view_thumbs_big")) ||
+        resolveImg($(el).find("img"));
+
       if (description) {
-        steps.push({
-          step: i + 1,
-          description,
-          image: imgSrc && imgSrc.startsWith("http") ? imgSrc : undefined,
-        });
+        steps.push({ step: i + 1, description, image });
       }
     });
 
-    // Strategy 2: step_list items
+    // Strategy 2: step_list_l 기반
     if (steps.length === 0) {
       $(".step_list_l").each((i, el) => {
         const description =
           $(el).find(".view_step_desc").text().trim() ||
           $(el).text().trim();
-        const imgSrc = $(el).siblings(".step_list_r").find("img").attr("src");
+        const image = resolveImg($(el).siblings(".step_list_r").find("img"));
         if (description) {
-          steps.push({
-            step: i + 1,
-            description,
-            image: imgSrc && imgSrc.startsWith("http") ? imgSrc : undefined,
-          });
+          steps.push({ step: i + 1, description, image });
         }
       });
     }
 
-    // Strategy 3: any element with step class
+    // Strategy 3: step 관련 클래스 최후 시도
     if (steps.length === 0) {
-      $("[class*='step_cont'], [class*='step_desc']").each((i, el) => {
-        const description = $(el).text().trim();
+      $("[class*='step_cont']").each((i, el) => {
+        const description = $(el).find("[class*='step_desc']").text().trim() ||
+          $(el).text().trim();
+        const image = resolveImg($(el).find("img"));
         if (description && description.length > 5) {
-          steps.push({ step: i + 1, description });
+          steps.push({ step: i + 1, description, image });
         }
       });
     }
@@ -162,9 +181,7 @@ export async function GET(
       id,
       title,
       url: recipeUrl,
-      thumbnail: thumbnail.startsWith("http")
-        ? thumbnail
-        : thumbnail ? `${BASE_URL}${thumbnail}` : "",
+      thumbnail,
       servings,
       cookTime,
       difficulty,
